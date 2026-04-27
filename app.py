@@ -246,6 +246,141 @@ with r4:
     st.markdown("**🔧 Logging Real**")
     st.markdown("→ Agregar contador tokens\n\n→ CSV diario automático\n\n→ Alerta si > S/ 8/sem")
 
+# ─── COSTO REAL API (SIN SUBSIDIO) ───────────────────────────────────────────
+st.markdown("---")
+st.markdown("## 💸 ¿Cuánto pagarías sin el subsidio de Claude?")
+st.markdown("Precios reales de la **API de Anthropic** (abril 2026) según [phuryn/claude-usage](https://github.com/phuryn/claude-usage)")
+
+# Tabla de precios API reales (USD por millón de tokens)
+PRECIOS_API = {
+    "Claude Opus":   {"input": 5.00,  "output": 25.00},
+    "Claude Sonnet": {"input": 3.00,  "output": 15.00},
+    "Claude Haiku":  {"input": 1.00,  "output": 5.00},
+}
+USD_TO_PEN = 3.72  # Tipo de cambio referencial
+
+def calcular_costo_api(modelo, tokens_input, tokens_output):
+    clave = "Claude Sonnet"
+    if "Opus" in modelo:
+        clave = "Claude Opus"
+    elif "Haiku" in modelo:
+        clave = "Claude Haiku"
+    precio = PRECIOS_API[clave]
+    return (tokens_input / 1_000_000 * precio["input"]) + (tokens_output / 1_000_000 * precio["output"])
+
+# Calcular costo API real para datos filtrados
+df_api = df.copy()
+df_api["Costo API USD"] = df_api.apply(
+    lambda r: calcular_costo_api(r["Modelo"], r["Tokens Input"], r["Tokens Output"]), axis=1
+)
+df_api["Costo API S/"] = df_api["Costo API USD"] * USD_TO_PEN
+
+total_api_usd = df_api["Costo API USD"].sum()
+total_api_pen = df_api["Costo API S/"].sum()
+total_subsidiado = df["Costo S/"].sum()
+ahorro_pen = total_api_pen - total_subsidiado
+pct_ahorro = (ahorro_pen / total_api_pen * 100) if total_api_pen > 0 else 0
+
+# Plan Claude Max mensual estimado (referencia)
+plan_max_usd = 100  # USD/mes Claude Max
+plan_max_pen = plan_max_usd * USD_TO_PEN
+
+# KPIs comparativos
+ka1, ka2, ka3, ka4 = st.columns(4)
+ka1.metric(
+    "💳 Costo API Real (USD)",
+    f"${total_api_usd:.4f}",
+    f"S/ {total_api_pen:.4f} al cambio"
+)
+ka2.metric(
+    "✅ Lo que pagas (subvencionado)",
+    f"S/ {total_subsidiado:.2f}",
+    "Incluido en tu plan Claude"
+)
+ka3.metric(
+    "🎁 Ahorro por subsidio",
+    f"S/ {ahorro_pen:.4f}",
+    f"{pct_ahorro:.1f}% ahorrado vs API directa"
+)
+ka4.metric(
+    "📅 Proyección API mensual",
+    f"S/ {total_api_pen / max(len(df),1) * 30:.2f}",
+    f"vs Plan Max S/ {plan_max_pen:.0f}/mes"
+)
+
+st.markdown("")
+
+# Gráfico comparativo: Costo real vs subvencionado por sesión
+col_a, col_b = st.columns(2)
+
+with col_a:
+    st.markdown("### 📊 Costo API vs Subvencionado por Sesión")
+    df_comp = df_api[["Fecha","Proyecto","Modelo","Costo S/","Costo API S/"]].copy()
+    df_comp["Fecha_str"] = df_comp["Fecha"].dt.strftime("%d/%m")
+    df_comp["Label"] = df_comp["Fecha_str"] + " · " + df_comp["Proyecto"].str.split().str[0]
+
+    fig_comp = go.Figure()
+    fig_comp.add_trace(go.Bar(
+        name="Con subsidio (actual)",
+        x=df_comp["Label"], y=df_comp["Costo S/"],
+        marker_color="#059669", opacity=0.9
+    ))
+    fig_comp.add_trace(go.Bar(
+        name="Sin subsidio (API real)",
+        x=df_comp["Label"], y=df_comp["Costo API S/"],
+        marker_color="#DC2626", opacity=0.85
+    ))
+    fig_comp.update_layout(
+        barmode="group", height=300,
+        plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(gridcolor="#F3F4F6", title="S/"),
+        xaxis=dict(gridcolor=None, tickangle=-30),
+        legend=dict(orientation="h", y=1.15),
+        margin=dict(t=40, b=60)
+    )
+    st.plotly_chart(fig_comp, use_container_width=True)
+
+with col_b:
+    st.markdown("### 💰 Costo API Real por Modelo")
+    # Tabla de precios de referencia
+    df_precios = pd.DataFrame([
+        {"Modelo": "Claude Opus",   "Input ($/MTok)": "$5.00",  "Output ($/MTok)": "$25.00", "Input (S//MTok)": f"S/ {5.00*USD_TO_PEN:.2f}",  "Output (S//MTok)": f"S/ {25.00*USD_TO_PEN:.2f}"},
+        {"Modelo": "Claude Sonnet", "Input ($/MTok)": "$3.00",  "Output ($/MTok)": "$15.00", "Input (S//MTok)": f"S/ {3.00*USD_TO_PEN:.2f}",  "Output (S//MTok)": f"S/ {15.00*USD_TO_PEN:.2f}"},
+        {"Modelo": "Claude Haiku",  "Input ($/MTok)": "$1.00",  "Output ($/MTok)": "$5.00",  "Input (S//MTok)": f"S/ {1.00*USD_TO_PEN:.2f}",  "Output (S//MTok)": f"S/ {5.00*USD_TO_PEN:.2f}"},
+    ])
+    st.dataframe(df_precios, use_container_width=True, hide_index=True)
+
+    st.markdown("")
+    # Costo API real por modelo con tus datos
+    by_mod_api = df_api.groupby("Modelo").agg(
+        Sesiones=("Modelo","count"),
+        Tokens_Input=("Tokens Input","sum"),
+        Tokens_Output=("Tokens Output","sum"),
+        Costo_API_USD=("Costo API USD","sum"),
+        Costo_API_PEN=("Costo API S/","sum"),
+    ).reset_index()
+    by_mod_api["Costo API USD"] = by_mod_api["Costo_API_USD"].apply(lambda x: f"${x:.4f}")
+    by_mod_api["Costo API S/"] = by_mod_api["Costo_API_PEN"].apply(lambda x: f"S/ {x:.4f}")
+    st.dataframe(
+        by_mod_api[["Modelo","Sesiones","Tokens_Input","Tokens_Output","Costo API USD","Costo API S/"]],
+        use_container_width=True, hide_index=True
+    )
+
+# Box informativo — contexto del subsidio
+st.markdown("")
+diff_usd = total_api_usd
+plan_max_diario = plan_max_usd / 30
+uso_diario_pct = (diff_usd / plan_max_diario * 100) if plan_max_diario > 0 else 0
+
+st.info(
+    f"**¿Qué significa esto?**\n\n"
+    f"- Con la **API directa de Anthropic**, estas {len(df)} sesiones te habrían costado **${total_api_usd:.4f} USD (S/ {total_api_pen:.4f})** en total.\n"
+    f"- Con tu **plan Claude** (subvencionado), pagas S/ {total_subsidiado:.2f} — un ahorro del **{pct_ahorro:.1f}%**.\n"
+    f"- Si usaras Claude API puro todos los meses a este ritmo: **S/ {total_api_pen/max(len(df),1)*30:.2f}/mes**.\n"
+    f"- El **Plan Claude Max (~S/ {plan_max_pen:.0f}/mes)** tiene sentido si usas más de S/ {plan_max_pen:.0f} en valor de API mensual.\n\n"
+    f"**Fuente de precios**: [github.com/phuryn/claude-usage](https://github.com/phuryn/claude-usage) · Anthropic API pricing abril 2026"
+)
+
 # ─── TABLA ───────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown("## 📋 Detalle de Sesiones")
